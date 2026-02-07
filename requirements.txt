@@ -1,5 +1,6 @@
 streamlit
+scikit-learn
+nltk
 newspaper3k
-beautifulsoup4
-requests
 lxml
+lxml_html_clean
