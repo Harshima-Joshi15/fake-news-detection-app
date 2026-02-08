@@ -1,3 +1,7 @@
 streamlit
+scikit-learn
+pandas
+numpy
+newspaper3k
+lxml
 requests
-beautifulsoup4
