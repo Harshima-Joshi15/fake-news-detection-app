@@ -5,5 +5,5 @@ numpy
 newspaper3k
 lxml
 lxml_html_clean
-
-
+requests
+beautifulsoup4
