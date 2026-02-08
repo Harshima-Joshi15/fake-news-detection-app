@@ -1,5 +1,9 @@
 streamlit
+scikit-learn
+pandas
+numpy
 newspaper3k
 lxml
 lxml_html_clean
+
 
