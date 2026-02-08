@@ -1,102 +1,117 @@
 import streamlit as st
+import pickle
 from newspaper import Article
-import re
 from urllib.parse import urlparse
+import requests
+from bs4 import BeautifulSoup
 
-# ---------------- CONFIG ----------------
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="Fake News Detection App",
+    page_title="Fake News Detection",
     page_icon="📰",
     layout="centered"
 )
 
+# ---------------- LOAD ML ASSETS ----------------
+MODEL_PATH = "model/fake_news_model.pkl"
+VECTORIZER_PATH = "model/vectorizer.pkl"
+
+model = pickle.load(open(MODEL_PATH, "rb"))
+vectorizer = pickle.load(open(VECTORIZER_PATH, "rb"))
+
 TRUSTED_SOURCES = [
-    "ndtv.com", "bbc.com", "reuters.com", "thehindu.com",
-    "cnn.com", "timesofindia.indiatimes.com", "hindustantimes.com"
+    "msn.com",
+    "ndtv.com",
+    "bbc.com",
+    "reuters.com",
+    "cnn.com",
+    "thehindu.com",
+    "indiatoday.in",
+    "timesofindia.indiatimes.com",
+    "hindustantimes.com"
 ]
 
-SENSATIONAL_WORDS = [
-    "guaranteed", "shocking", "breaking", "exposed",
-    "unbelievable", "secret", "viral", "click here"
-]
+# ---------------- ARTICLE EXTRACTION ----------------
+def extract_article_primary(url):
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        return article.text.strip()
+    except:
+        return ""
 
-# ---------------- FUNCTIONS ----------------
-def extract_article(url):
-    article = Article(url)
-    article.download()
-    article.parse()
-    return article.text
+def extract_article_fallback(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+        paragraphs = soup.find_all("p")
+        text = " ".join(p.get_text() for p in paragraphs)
+        return text.strip()
+    except:
+        return ""
 
-def get_domain(url):
-    return urlparse(url).netloc.lower()
-
-def analyze_text(text, source_domain=None):
-    score = 50
+# ---------------- PREDICTION LOGIC ----------------
+def predict_news(text, url=None):
     reasons = []
 
-    word_count = len(text.split())
+    if len(text.split()) < 40:
+        return (
+            "🟡 Uncertain",
+            55,
+            ["Could not extract enough readable article text from the link"]
+        )
 
-    if word_count > 300:
-        score += 20
-        reasons.append("Article has sufficient length.")
-    elif word_count < 80:
-        score -= 20
-        reasons.append("Article is very short.")
+    vec = vectorizer.transform([text])
+    prob_real = model.predict_proba(vec)[0][1]
+    final_score = prob_real
 
-    sensational_hits = [
-        word for word in SENSATIONAL_WORDS
-        if re.search(rf"\b{word}\b", text.lower())
-    ]
+    if url:
+        domain = urlparse(url).netloc.lower()
+        if any(src in domain for src in TRUSTED_SOURCES):
+            final_score = min(final_score + 0.25, 1.0)
+            reasons.append("Published by a trusted news source")
 
-    if sensational_hits:
-        score -= 25
-        reasons.append(f"Sensational words detected: {', '.join(sensational_hits)}")
-
-    if source_domain:
-        for trusted in TRUSTED_SOURCES:
-            if trusted in source_domain:
-                score += 30
-                reasons.append(f"Trusted news source detected ({trusted}).")
-                break
-
-    score = max(0, min(score, 100))
-
-    if score >= 70:
-        verdict = "✅ Likely Real News"
-    elif score >= 40:
-        verdict = "⚠️ Suspicious"
+    if final_score >= 0.75:
+        label = "🟢 Likely Real"
+    elif final_score >= 0.45:
+        label = "🟡 Uncertain"
     else:
-        verdict = "❌ Likely Fake News"
+        label = "🔴 Likely Misleading"
 
-    return verdict, score, reasons
+    reasons.append(f"ML model confidence: {round(prob_real * 100, 2)}%")
+
+    return label, round(final_score * 100, 2), reasons
 
 # ---------------- UI ----------------
 st.title("📰 Fake News Detection App")
-st.caption("AI-powered news credibility analyzer")
+st.caption("ML-powered news credibility analyzer")
 
-input_text = st.text_area(
-    "📌 Paste news article text or news URL",
+user_input = st.text_area(
+    "📌 Paste news article text or a news URL",
     height=220,
-    placeholder="Paste full article text or URL here..."
+    placeholder="Paste a full news article OR a news link here..."
 )
 
-if st.button("🔍 Check News"):
-    if not input_text.strip():
+if st.button("🔍 Analyze News"):
+    if not user_input.strip():
         st.warning("Please enter text or a URL.")
     else:
         with st.spinner("Analyzing content..."):
             try:
-                if input_text.startswith("http"):
-                    st.info("Reading article from link...")
-                    text = extract_article(input_text)
-                    domain = get_domain(input_text)
+                if user_input.startswith("http"):
+                    text = extract_article_primary(user_input)
+
+                    if len(text.split()) < 50:
+                        text = extract_article_fallback(user_input)
+
+                    label, score, reasons = predict_news(text, user_input)
                 else:
-                    text = input_text
-                    domain = None
+                    label, score, reasons = predict_news(user_input)
 
-                verdict, score, reasons = analyze_text(text, domain)
-
-                st.subheader(verdict)
+                st.subheader(label)
+                st.progress(score / 100)
                 st.metric("Credibility Score", f"{score}%")
 
                 st.subheader("🧠 Explanation")
@@ -104,4 +119,4 @@ if st.button("🔍 Check News"):
                     st.write("•", r)
 
             except Exception as e:
-                st.error("Could not analyze this content.")
+                st.error("Unable to analyze this content.")
