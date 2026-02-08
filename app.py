@@ -1,103 +1,107 @@
 import streamlit as st
-import re
-import requests
 from newspaper import Article
-from bs4 import BeautifulSoup
+import re
+from urllib.parse import urlparse
 
-st.set_page_config(page_title="Fake News Detector", layout="centered")
-
-st.title("📰 Fake News Detection App")
-st.caption("AI-powered news authenticity checker")
-
-news_input = st.text_area(
-    "📝 Paste news article OR news link",
-    height=200,
-    placeholder="Paste full news text or URL here..."
+# ---------------- CONFIG ----------------
+st.set_page_config(
+    page_title="Fake News Detection App",
+    page_icon="📰",
+    layout="centered"
 )
 
-def is_url(text):
-    return bool(re.search(r"https?://\S+", text))
+TRUSTED_SOURCES = [
+    "ndtv.com", "bbc.com", "reuters.com", "thehindu.com",
+    "cnn.com", "timesofindia.indiatimes.com", "hindustantimes.com"
+]
 
-def extract_with_newspaper(url):
-    try:
-        article = Article(url)
-        article.download()
-        article.parse()
-        return article.text
-    except:
-        return None
+SENSATIONAL_WORDS = [
+    "guaranteed", "shocking", "breaking", "exposed",
+    "unbelievable", "secret", "viral", "click here"
+]
 
-def extract_with_bs(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
+# ---------------- FUNCTIONS ----------------
+def extract_article(url):
+    article = Article(url)
+    article.download()
+    article.parse()
+    return article.text
 
-        paragraphs = soup.find_all("p")
-        text = " ".join([p.get_text() for p in paragraphs])
+def get_domain(url):
+    return urlparse(url).netloc.lower()
 
-        return text
-    except:
-        return None
-
-def analyze_news(text):
+def analyze_text(text, source_domain=None):
+    score = 50
     reasons = []
 
-    if len(text.split()) < 80:
-        reasons.append("Article is very short")
+    word_count = len(text.split())
 
-    sensational_words = [
-        "shocking", "breaking", "exposed", "secret",
-        "you won't believe", "miracle", "guaranteed"
+    if word_count > 300:
+        score += 20
+        reasons.append("Article has sufficient length.")
+    elif word_count < 80:
+        score -= 20
+        reasons.append("Article is very short.")
+
+    sensational_hits = [
+        word for word in SENSATIONAL_WORDS
+        if re.search(rf"\b{word}\b", text.lower())
     ]
 
-    for word in sensational_words:
-        if word in text.lower():
-            reasons.append(f"Uses sensational phrase: '{word}'")
-            break
+    if sensational_hits:
+        score -= 25
+        reasons.append(f"Sensational words detected: {', '.join(sensational_hits)}")
 
-    if not any(word in text.lower() for word in ["said", "reported", "according to", "stated"]):
-        reasons.append("Lacks formal journalistic attribution")
+    if source_domain:
+        for trusted in TRUSTED_SOURCES:
+            if trusted in source_domain:
+                score += 30
+                reasons.append(f"Trusted news source detected ({trusted}).")
+                break
 
-    if len(reasons) == 0:
-        return "Likely Real", "Language, length, and structure resemble credible journalism."
+    score = max(0, min(score, 100))
 
-    if len(reasons) >= 3:
-        return "Likely Fake", "; ".join(reasons)
+    if score >= 70:
+        verdict = "✅ Likely Real News"
+    elif score >= 40:
+        verdict = "⚠️ Suspicious"
+    else:
+        verdict = "❌ Likely Fake News"
 
-    return "Uncertain", "; ".join(reasons)
+    return verdict, score, reasons
+
+# ---------------- UI ----------------
+st.title("📰 Fake News Detection App")
+st.caption("AI-powered news credibility analyzer")
+
+input_text = st.text_area(
+    "📌 Paste news article text or news URL",
+    height=220,
+    placeholder="Paste full article text or URL here..."
+)
 
 if st.button("🔍 Check News"):
-    if news_input.strip() == "":
-        st.warning("⚠️ Please paste some text or a link.")
+    if not input_text.strip():
+        st.warning("Please enter text or a URL.")
     else:
-        text_to_check = news_input
+        with st.spinner("Analyzing content..."):
+            try:
+                if input_text.startswith("http"):
+                    st.info("Reading article from link...")
+                    text = extract_article(input_text)
+                    domain = get_domain(input_text)
+                else:
+                    text = input_text
+                    domain = None
 
-        if is_url(news_input):
-            st.info("🔗 Reading article from link...")
+                verdict, score, reasons = analyze_text(text, domain)
 
-            text = extract_with_newspaper(news_input)
+                st.subheader(verdict)
+                st.metric("Credibility Score", f"{score}%")
 
-            if not text or len(text.split()) < 50:
-                st.warning("⚠️ Primary extraction failed. Trying alternate method...")
-                text = extract_with_bs(news_input)
+                st.subheader("🧠 Explanation")
+                for r in reasons:
+                    st.write("•", r)
 
-            if not text or len(text.split()) < 50:
-                st.error("❌ This website blocks automatic reading (common for MSN, Google News).")
-                st.info("👉 Please copy-paste the article text manually.")
-                st.stop()
-
-            text_to_check = text
-            st.success("✅ Article content extracted successfully.")
-
-        result, explanation = analyze_news(text_to_check)
-
-        if result == "Likely Real":
-            st.success("✅ **Likely Real News**")
-        elif result == "Likely Fake":
-            st.error("❌ **Likely Fake News**")
-        else:
-            st.warning("⚠️ **Uncertain**")
-
-        st.subheader("🧠 Explanation")
-        st.write(explanation)
+            except Exception as e:
+                st.error("Could not analyze this content.")
