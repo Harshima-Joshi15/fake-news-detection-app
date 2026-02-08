@@ -1,114 +1,113 @@
 import streamlit as st
-import pickle
-from newspaper import Article
 from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
+import re
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="Fake News Detection",
+    page_title="News Credibility Checker",
     page_icon="📰",
     layout="centered"
 )
 
-# ---------------- LOAD ML ASSETS ----------------
-MODEL_PATH = "model/fake_news_model.pkl"
-VECTORIZER_PATH = "model/vectorizer.pkl"
-
-model = pickle.load(open(MODEL_PATH, "rb"))
-vectorizer = pickle.load(open(VECTORIZER_PATH, "rb"))
-
+# ---------------- TRUSTED SOURCES ----------------
 TRUSTED_SOURCES = [
     "msn.com",
+    "economictimes.com",
     "ndtv.com",
     "bbc.com",
     "reuters.com",
     "cnn.com",
     "thehindu.com",
     "indiatoday.in",
-    "timesofindia.indiatimes.com",
-    "hindustantimes.com"
+    "hindustantimes.com",
+    "timesofindia.indiatimes.com"
+]
+
+CLICKBAIT_PHRASES = [
+    "you won’t believe",
+    "shocking",
+    "breaking",
+    "secret",
+    "exposed",
+    "goes viral",
+    "must read",
+    "what happened next"
 ]
 
 # ---------------- ARTICLE EXTRACTION ----------------
-def extract_article_primary(url):
-    try:
-        article = Article(url)
-        article.download()
-        article.parse()
-        return article.text.strip()
-    except:
-        return ""
+def extract_text(url):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(response.text, "html.parser")
+    paragraphs = soup.find_all("p")
+    return " ".join(p.get_text() for p in paragraphs)
 
-def extract_article_fallback(url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-        paragraphs = soup.find_all("p")
-        text = " ".join(p.get_text() for p in paragraphs)
-        return text.strip()
-    except:
-        return ""
-
-# ---------------- PREDICTION LOGIC ----------------
-def predict_news(text, url=None):
+# ---------------- ANALYSIS ----------------
+def analyze_article(text, url=None):
     reasons = []
+    score = 0.5  # neutral base
 
-    if len(text.split()) < 40:
-        return (
-            "🟡 Uncertain",
-            55,
-            ["Could not extract enough readable article text from the link"]
-        )
-
-    vec = vectorizer.transform([text])
-    prob_real = model.predict_proba(vec)[0][1]
-    final_score = prob_real
-
+    # ---- SOURCE CHECK ----
     if url:
         domain = urlparse(url).netloc.lower()
         if any(src in domain for src in TRUSTED_SOURCES):
-            final_score = min(final_score + 0.25, 1.0)
-            reasons.append("Published by a trusted news source")
+            score += 0.35
+            reasons.append("Source is a well-known and trusted news organization.")
+        else:
+            score -= 0.2
+            reasons.append("Source is unknown or not widely trusted.")
 
-    if final_score >= 0.75:
-        label = "🟢 Likely Real"
-    elif final_score >= 0.45:
-        label = "🟡 Uncertain"
+    # ---- LANGUAGE CHECK ----
+    text_lower = text.lower()
+
+    clickbait_hits = sum(1 for p in CLICKBAIT_PHRASES if p in text_lower)
+    if clickbait_hits > 0:
+        score -= 0.2
+        reasons.append("Article uses sensational or clickbait-style language.")
+
+    if re.search(r"\b[A-Z]{4,}\b", text):
+        score -= 0.1
+        reasons.append("Excessive capitalization detected, often used in misleading content.")
+
+    if len(text.split()) < 80:
+        score -= 0.15
+        reasons.append("Article text is very short, limiting credibility assessment.")
+
+    # ---- FINAL LABEL ----
+    score = max(0, min(score, 1))
+
+    if score >= 0.7:
+        label = "🟢 Likely Reliable News"
+    elif score >= 0.45:
+        label = "🟡 Use Caution"
     else:
-        label = "🔴 Likely Misleading"
+        label = "🔴 Likely Unreliable"
 
-    reasons.append(f"ML model confidence: {round(prob_real * 100, 2)}%")
-
-    return label, round(final_score * 100, 2), reasons
+    return label, round(score * 100, 2), reasons
 
 # ---------------- UI ----------------
-st.title("📰 Fake News Detection App")
-st.caption("ML-powered news credibility analyzer")
+st.title("📰 News Credibility Checker")
+st.caption("Checks source reliability and writing quality — not fake news guessing.")
 
 user_input = st.text_area(
-    "📌 Paste news article text or a news URL",
+    "Paste a news article or URL",
     height=220,
-    placeholder="Paste a full news article OR a news link here..."
+    placeholder="Paste a news article or a news website link..."
 )
 
-if st.button("🔍 Analyze News"):
+if st.button("🔍 Analyze"):
     if not user_input.strip():
-        st.warning("Please enter text or a URL.")
+        st.warning("Please enter some text or a URL.")
     else:
-        with st.spinner("Analyzing content..."):
+        with st.spinner("Analyzing credibility..."):
             try:
                 if user_input.startswith("http"):
-                    text = extract_article_primary(user_input)
-
-                    if len(text.split()) < 50:
-                        text = extract_article_fallback(user_input)
-
-                    label, score, reasons = predict_news(text, user_input)
+                    text = extract_text(user_input)
+                    label, score, reasons = analyze_article(text, user_input)
                 else:
-                    label, score, reasons = predict_news(user_input)
+                    label, score, reasons = analyze_article(user_input)
 
                 st.subheader(label)
                 st.progress(score / 100)
@@ -118,5 +117,5 @@ if st.button("🔍 Analyze News"):
                 for r in reasons:
                     st.write("•", r)
 
-            except Exception as e:
-                st.error("Unable to analyze this content.")
+            except Exception:
+                st.error("Unable to analyze this content. The website may block access.")
