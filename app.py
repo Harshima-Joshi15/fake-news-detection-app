@@ -1,90 +1,90 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+import urllib.parse
+from difflib import SequenceMatcher
 
 NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
 
-st.title("Fake News Detection & Verification")
+st.title("AI News Verification System")
 
-user_input = st.text_input("Enter a news claim or paste a URL:")
+user_input = st.text_area("Enter a claim, paste article text, or provide a URL:")
 analyze = st.button("Analyze")
 
+trusted_domains = [
+    "bbc.com",
+    "reuters.com",
+    "ndtv.com",
+    "thehindu.com",
+    "hindustantimes.com",
+    "timesofindia.com",
+    "msn.com",
+    "indiatoday.in",
+    "news18.com"
+]
 
-def fetch_related_news(query):
-    url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWS_API_KEY}&language=en&sortBy=relevancy"
+def fetch_news(query):
+    url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWS_API_KEY}&language=en"
     response = requests.get(url)
     data = response.json()
-
     if data["status"] == "ok":
         return data["articles"]
     return []
 
-def check_url_readability(url):
+def extract_text(url):
     try:
         response = requests.get(url, timeout=5)
         soup = BeautifulSoup(response.text, "html.parser")
-
         paragraphs = soup.find_all("p")
-        text = " ".join([p.get_text() for p in paragraphs])
-
-        if len(text) > 500:
-            return True, text[:500]
-        else:
-            return False, ""
+        return " ".join([p.get_text() for p in paragraphs])
     except:
-        return False, ""
+        return ""
+
+def similarity(a, b):
+    return SequenceMatcher(None, a, b).ratio()
 
 if analyze and user_input:
 
-
-    # Case 1: User entered a URL
+    # If URL
     if user_input.startswith("http"):
+        content = extract_text(user_input)
+        if len(content) < 200:
+            st.warning("Could not fully extract article. Searching trusted coverage...")
+        query = content[:300]
 
-        readable, preview = check_url_readability(user_input)
-
-        if readable:
-            st.success("The article is readable and appears properly structured.")
-            st.write("It is most likely true, but always cross-check with trusted sources.")
-
-            st.subheader("Article Preview:")
-            st.write(preview + "...")
-
-        else:
-            st.error("This article appears unreliable.")
-            st.write("Reasons:")
-            st.write("- The content could not be properly extracted.")
-            st.write("- The website may not be a trusted news source.")
-            st.write("- The formatting is not ideal or lacks structured reporting.")
-
-        st.subheader("Verified News Related To This Topic:")
-        related_news = fetch_related_news(user_input)
-
-        if related_news:
-            for article in related_news[:5]:
-                st.markdown(f"- [{article['title']}]({article['url']})")
-        else:
-            st.write("No verified coverage found in trusted outlets.")
-
-    # Case 2: User entered a claim
+    # If claim or pasted article text
     else:
+        query = user_input[:300]
+        content = user_input
 
-        st.info("Analyzing claim and searching trusted sources...")
+    related_articles = fetch_news(query)
 
-        related_news = fetch_related_news(user_input)
+    if related_articles:
 
-        if related_news:
-            st.success("Related coverage found in trusted news sources.")
-            st.write("This claim is most likely TRUE because similar reports exist in recognized media.")
+        best_score = 0
+        for article in related_articles:
+            compare_text = article["description"] or ""
+            score = similarity(content[:500], compare_text)
+            if score > best_score:
+                best_score = score
 
-            st.subheader("Trusted Sources Reporting This:")
-            for article in related_news[:5]:
-                st.markdown(f"- [{article['title']}]({article['url']})")
+        confidence = int(best_score * 100)
+
+        if confidence > 60 or len(related_articles) > 3:
+            st.success(f"This claim/article is likely TRUE ({confidence}% confidence).")
+            st.write("Multiple trusted sources are reporting similar information.")
+            st.write("You can continue reading the provided article if from trusted source.")
 
         else:
-            st.error("No trusted news coverage found.")
-            st.write("This claim is most likely UNRELIABLE because:")
-            st.write("- No major news outlets are reporting this.")
-            st.write("- It may be a rumor or unverified information.")
+            st.error(f"This claim/article seems UNVERIFIED or potentially FALSE ({confidence}% confidence).")
+            st.write("The content does not strongly match trusted news coverage.")
 
-            st.subheader("You may prefer checking verified sources manually.")
+        show_sources = st.button("Show Trusted Sources")
 
+        if show_sources:
+            st.subheader("Trusted News Available Online:")
+            for article in related_articles[:5]:
+                st.markdown(f"- [{article['title']}]({article['url']})")
+
+    else:
+        st.error("No trusted coverage found. This claim may be unreliable or unverified.")
