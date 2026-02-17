@@ -7,6 +7,8 @@ NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
 st.title("Fake News Detection & Verification")
 
 user_input = st.text_input("Enter a news claim or paste a URL:")
+analyze = st.button("Analyze")
+
 
 def fetch_related_news(query):
     url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWS_API_KEY}&language=en&sortBy=relevancy"
@@ -32,7 +34,8 @@ def check_url_readability(url):
     except:
         return False, ""
 
-if user_input:
+if analyze and user_input:
+
 
     # Case 1: User entered a URL
     if user_input.startswith("http"):
@@ -84,3 +87,4 @@ if user_input:
             st.write("- It may be a rumor or unverified information.")
 
             st.subheader("You may prefer checking verified sources manually.")
+
