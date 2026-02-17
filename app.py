@@ -1,14 +1,12 @@
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
 import urllib.parse
-from difflib import SequenceMatcher
 
 NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
 
 st.title("AI News Verification System")
 
-user_input = st.text_area("Enter a claim, paste article text, or provide a URL:")
+user_input = st.text_area("Paste a URL, claim, or article:")
 analyze = st.button("Analyze")
 
 trusted_domains = [
@@ -24,67 +22,63 @@ trusted_domains = [
 ]
 
 def fetch_news(query):
-    url = f"https://newsapi.org/v2/everything?q={query}&apiKey={NEWS_API_KEY}&language=en"
+    url = f"https://newsapi.org/v2/everything?q={query}&language=en&apiKey={NEWS_API_KEY}"
     response = requests.get(url)
     data = response.json()
     if data["status"] == "ok":
         return data["articles"]
     return []
 
-def extract_text(url):
+def extract_headline_from_url(url):
     try:
-        response = requests.get(url, timeout=5)
-        soup = BeautifulSoup(response.text, "html.parser")
-        paragraphs = soup.find_all("p")
-        return " ".join([p.get_text() for p in paragraphs])
+        path = urllib.parse.urlparse(url).path
+        headline_part = path.split("/")[-1]
+        headline_part = headline_part.split("?")[0]
+        headline = headline_part.replace("-", " ")
+        headline = ''.join([i for i in headline if not i.isdigit()])
+        return headline
     except:
         return ""
 
-def similarity(a, b):
-    return SequenceMatcher(None, a, b).ratio()
+def prepare_query(text):
+    words = text.split()
+    return " ".join(words[:20])  # use first 20 words only
 
 if analyze and user_input:
 
     # If URL
     if user_input.startswith("http"):
-        content = extract_text(user_input)
-        if len(content) < 200:
-            st.warning("Could not fully extract article. Searching trusted coverage...")
-        query = content[:300]
+        query = extract_headline_from_url(user_input)
+        st.info(f"Searching trusted coverage for: {query}")
 
-    # If claim or pasted article text
+    # If claim or article
     else:
-        query = user_input[:300]
-        content = user_input
+        query = prepare_query(user_input)
+        st.info("Analyzing claim/article against trusted sources...")
 
     related_articles = fetch_news(query)
 
     if related_articles:
 
-        best_score = 0
-        for article in related_articles:
-            compare_text = article["description"] or ""
-            score = similarity(content[:500], compare_text)
-            if score > best_score:
-                best_score = score
+        trusted_matches = [
+            article for article in related_articles
+            if any(domain in article["url"] for domain in trusted_domains)
+        ]
 
-        confidence = int(best_score * 100)
+        confidence = min(len(trusted_matches) * 20, 95)
 
-        if confidence > 60 or len(related_articles) > 3:
-            st.success(f"This claim/article is likely TRUE ({confidence}% confidence).")
-            st.write("Multiple trusted sources are reporting similar information.")
-            st.write("You can continue reading the provided article if from trusted source.")
+        if confidence > 40:
+            st.success(f"YES — This appears to be REAL news ({confidence}% confidence).")
+            st.write("The claim/article matches trusted news coverage.")
+            st.write("You may continue reading. Trusted sources are listed below.")
 
         else:
-            st.error(f"This claim/article seems UNVERIFIED or potentially FALSE ({confidence}% confidence).")
-            st.write("The content does not strongly match trusted news coverage.")
+            st.warning(f"This seems UNVERIFIED or potentially unreliable ({confidence}% confidence).")
+            st.write("Limited trusted coverage found. Please verify using sources below.")
 
-        show_sources = st.button("Show Trusted Sources")
-
-        if show_sources:
-            st.subheader("Trusted News Available Online:")
-            for article in related_articles[:5]:
-                st.markdown(f"- [{article['title']}]({article['url']})")
+        st.subheader("Trusted Sources Reporting This:")
+        for article in trusted_matches[:5]:
+            st.markdown(f"- [{article['title']}]({article['url']})")
 
     else:
-        st.error("No trusted coverage found. This claim may be unreliable or unverified.")
+        st.error("No trusted coverage found. This claim/article may be false or very new.")
