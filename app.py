@@ -1,12 +1,13 @@
 import streamlit as st
 import pickle
 import requests
+from bs4 import BeautifulSoup
 import re
 
 # -----------------------------
 # CONFIG
 # -----------------------------
-NEWS_API_KEY = "468e3b8c85624a468fd4b862347a813f"
+NEWS_API_KEY = st.secrets["468e3b8c85624a468fd4b862347a813f"]
 
 TRUSTED_SOURCES = [
     "bbc-news",
@@ -28,6 +29,19 @@ vectorizer = pickle.load(open("vectorizer.pkl", "rb"))
 # -----------------------------
 # FUNCTIONS
 # -----------------------------
+
+def extract_text_from_url(url):
+    try:
+        response = requests.get(url, timeout=5)
+        soup = BeautifulSoup(response.content, "html.parser")
+
+        paragraphs = soup.find_all("p")
+        article_text = " ".join([p.get_text() for p in paragraphs])
+
+        return article_text
+    except:
+        return None
+
 
 def search_verified_news(query):
     url = f"https://newsapi.org/v2/everything?q={query}&language=en&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
@@ -61,27 +75,36 @@ def analyze_text(text):
 
 st.title("📰 AI News Credibility & Verification System")
 
-user_input = st.text_area("Enter news text or claim:")
+user_input = st.text_area("Enter news text, claim, or article URL:")
 
 if st.button("Analyze"):
 
     if not user_input.strip():
-        st.warning("Please enter some text.")
+        st.warning("Please enter some text or URL.")
         st.stop()
 
-    word_count = len(user_input.split())
+    # Detect URL
+    if user_input.startswith("http"):
+        st.info("🔍 Extracting article content from URL...")
+        extracted_text = extract_text_from_url(user_input)
 
-    if word_count < MIN_WORDS_REQUIRED:
-        st.warning("⚠ Please enter a full claim or article. Short keywords cannot be verified reliably.")
-        st.stop()
+        if not extracted_text or len(extracted_text.split()) < MIN_WORDS_REQUIRED:
+            st.error("Could not extract sufficient article content.")
+            st.stop()
 
-    prediction, probability = analyze_text(user_input)
+        text_to_analyze = extracted_text
+    else:
+        text_to_analyze = user_input
 
+        if len(text_to_analyze.split()) < MIN_WORDS_REQUIRED:
+            st.warning("⚠ Please enter a more detailed claim or article.")
+            st.stop()
+
+    # Analyze using ML
+    prediction, probability = analyze_text(text_to_analyze)
+
+    # Search trusted news
     verified_articles = search_verified_news(user_input)
-
-    # -----------------------------
-    # DECISION LOGIC (Improved)
-    # -----------------------------
 
     explanation = []
 
@@ -89,9 +112,7 @@ if st.button("Analyze"):
         st.success("🟢 Related articles found from trusted sources.")
         for article in verified_articles:
             st.markdown(f"- [{article['title']}]({article['url']})")
-
         explanation.append("Trusted news sources are reporting related information.")
-
     else:
         explanation.append("No trusted sources reporting this claim were found.")
 
@@ -101,20 +122,17 @@ if st.button("Analyze"):
         explanation.append("Language patterns align with credible reporting.")
     elif probability > 0.45:
         verdict = "🟡 Use Caution"
-        explanation.append("Language is neutral but verification is limited.")
+        explanation.append("Language appears neutral but verification is limited.")
     else:
         verdict = "🔴 Likely Unreliable"
-        explanation.append("Language patterns resemble misleading or sensational content.")
+        explanation.append("Language resembles misleading or sensational content.")
 
-    # If trusted articles exist, soften harsh verdict
+    # Soften verdict if trusted articles exist
     if verified_articles and verdict == "🔴 Likely Unreliable":
         verdict = "🟡 Use Caution"
-        explanation.append("However, presence of trusted sources reduces risk.")
+        explanation.append("Presence of trusted reporting reduces risk.")
 
-    # -----------------------------
-    # OUTPUT
-    # -----------------------------
-
+    # Output
     st.subheader("Verdict:")
     st.write(verdict)
 
