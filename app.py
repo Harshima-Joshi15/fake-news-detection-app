@@ -1,6 +1,8 @@
 import streamlit as st
-import urllib.parse
+import requests
 import feedparser
+from bs4 import BeautifulSoup
+import urllib.parse
 
 st.set_page_config(page_title="AI News Verification System", layout="centered")
 
@@ -23,23 +25,15 @@ trusted_domains = [
 ]
 
 # ---------------------------
-# Extract headline from URL
+# Extract title from webpage
 # ---------------------------
-def extract_headline_from_url(url):
+def extract_title_from_url(url):
     try:
-        path = urllib.parse.urlparse(url).path
-        parts = path.split("/")
-
-        # Handle MSN-style URLs
-        if len(parts) >= 3:
-            headline_part = parts[-2]
-        else:
-            headline_part = parts[-1]
-
-        headline = headline_part.replace("-", " ")
-        headline = ''.join([i for i in headline if not i.isdigit()])
-        return headline.strip()
-
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(response.text, "html.parser")
+        title = soup.title.string if soup.title else ""
+        return title.strip()
     except:
         return ""
 
@@ -71,12 +65,17 @@ def fetch_news(query):
 # ---------------------------
 if analyze and user_input:
 
-    # URL case
+    # If URL
     if user_input.startswith("http"):
-        query = extract_headline_from_url(user_input)
-        st.info(f"Searching coverage for: {query}")
+        title = extract_title_from_url(user_input)
 
-    # Claim or article case
+        if not title:
+            st.error("Could not read article title from this URL.")
+            st.stop()
+
+        query = prepare_query(title)
+        st.info(f"Analyzing article: {title}")
+
     else:
         query = prepare_query(user_input)
         st.info("Analyzing claim/article against trusted sources...")
@@ -91,16 +90,15 @@ if analyze and user_input:
         ]
 
         total_matches = len(trusted_matches)
-
         confidence = min(total_matches * 15, 95)
 
         if confidence >= 45:
             st.success(f"✅ YES — This appears to be REAL news ({confidence}% confidence).")
-            st.write("The claim/article matches multiple trusted news sources.")
+            st.write("The claim/article matches trusted news coverage.")
             st.write("You may continue reading. Verified sources are listed below.")
 
         elif confidence > 0:
-            st.warning(f"⚠️ Limited coverage found ({confidence}% confidence).")
+            st.warning(f"⚠️ Limited trusted coverage found ({confidence}% confidence).")
             st.write("This may be new or not widely reported yet.")
 
         else:
@@ -114,4 +112,3 @@ if analyze and user_input:
 
     else:
         st.error("No results found in Google News.")
-        st.write("This claim/article may not exist or is extremely new.")
