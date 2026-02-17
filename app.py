@@ -7,7 +7,8 @@ import re
 # -----------------------------
 # CONFIG
 # -----------------------------
-NEWS_API_KEY = st.secrets["468e3b8c85624a468fd4b862347a813f"]
+NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
+
 
 TRUSTED_SOURCES = [
     "bbc-news",
@@ -142,3 +143,4 @@ if st.button("Analyze"):
     st.subheader("Explanation:")
     for line in explanation:
         st.write(f"- {line}")
+
