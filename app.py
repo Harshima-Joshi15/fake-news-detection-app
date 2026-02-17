@@ -32,13 +32,20 @@ def fetch_news(query):
 def extract_headline_from_url(url):
     try:
         path = urllib.parse.urlparse(url).path
-        headline_part = path.split("/")[-1]
-        headline_part = headline_part.split("?")[0]
+        parts = path.split("/")
+        
+        # MSN format: headline is second last part
+        if len(parts) >= 3:
+            headline_part = parts[-2]
+        else:
+            headline_part = parts[-1]
+
         headline = headline_part.replace("-", " ")
         headline = ''.join([i for i in headline if not i.isdigit()])
-        return headline
+        return headline.strip()
     except:
         return ""
+
 
 def prepare_query(text):
     words = text.split()
