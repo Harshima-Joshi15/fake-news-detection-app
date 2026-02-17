@@ -1,121 +1,126 @@
 import streamlit as st
-from urllib.parse import urlparse
+import pickle
 import requests
-from bs4 import BeautifulSoup
 import re
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="News Credibility Checker",
-    page_icon="📰",
-    layout="centered"
-)
+# -----------------------------
+# CONFIG
+# -----------------------------
+NEWS_API_KEY = "468e3b8c85624a468fd4b862347a813f"
 
-# ---------------- TRUSTED SOURCES ----------------
 TRUSTED_SOURCES = [
-    "msn.com",
-    "economictimes.com",
-    "ndtv.com",
-    "bbc.com",
-    "reuters.com",
-    "cnn.com",
-    "thehindu.com",
-    "indiatoday.in",
-    "hindustantimes.com",
-    "timesofindia.indiatimes.com"
+    "bbc-news",
+    "reuters",
+    "cnn",
+    "the-hindu",
+    "the-times-of-india",
+    "ndtv"
 ]
 
-CLICKBAIT_PHRASES = [
-    "you won’t believe",
-    "shocking",
-    "breaking",
-    "secret",
-    "exposed",
-    "goes viral",
-    "must read",
-    "what happened next"
-]
+MIN_WORDS_REQUIRED = 8
 
-# ---------------- ARTICLE EXTRACTION ----------------
-def extract_text(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers, timeout=10)
-    soup = BeautifulSoup(response.text, "html.parser")
-    paragraphs = soup.find_all("p")
-    return " ".join(p.get_text() for p in paragraphs)
+# -----------------------------
+# LOAD MODEL
+# -----------------------------
+model = pickle.load(open("fake_news_model.pkl", "rb"))
+vectorizer = pickle.load(open("vectorizer.pkl", "rb"))
 
-# ---------------- ANALYSIS ----------------
-def analyze_article(text, url=None):
-    reasons = []
-    score = 0.5  # neutral base
+# -----------------------------
+# FUNCTIONS
+# -----------------------------
 
-    # ---- SOURCE CHECK ----
-    if url:
-        domain = urlparse(url).netloc.lower()
-        if any(src in domain for src in TRUSTED_SOURCES):
-            score += 0.35
-            reasons.append("Source is a well-known and trusted news organization.")
-        else:
-            score -= 0.2
-            reasons.append("Source is unknown or not widely trusted.")
+def search_verified_news(query):
+    url = f"https://newsapi.org/v2/everything?q={query}&language=en&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
+    response = requests.get(url)
+    data = response.json()
 
-    # ---- LANGUAGE CHECK ----
-    text_lower = text.lower()
+    verified_articles = []
 
-    clickbait_hits = sum(1 for p in CLICKBAIT_PHRASES if p in text_lower)
-    if clickbait_hits > 0:
-        score -= 0.2
-        reasons.append("Article uses sensational or clickbait-style language.")
+    if data.get("articles"):
+        for article in data["articles"]:
+            if article["source"]["id"] in TRUSTED_SOURCES:
+                verified_articles.append({
+                    "title": article["title"],
+                    "url": article["url"]
+                })
 
-    if re.search(r"\b[A-Z]{4,}\b", text):
-        score -= 0.1
-        reasons.append("Excessive capitalization detected, often used in misleading content.")
+    return verified_articles[:3]
 
-    if len(text.split()) < 80:
-        score -= 0.15
-        reasons.append("Article text is very short, limiting credibility assessment.")
 
-    # ---- FINAL LABEL ----
-    score = max(0, min(score, 1))
+def analyze_text(text):
+    text_vec = vectorizer.transform([text])
+    prediction = model.predict(text_vec)[0]
+    probability = model.predict_proba(text_vec)[0][1]  # Probability of real
 
-    if score >= 0.7:
-        label = "🟢 Likely Reliable News"
-    elif score >= 0.45:
-        label = "🟡 Use Caution"
-    else:
-        label = "🔴 Likely Unreliable"
+    return prediction, probability
 
-    return label, round(score * 100, 2), reasons
 
-# ---------------- UI ----------------
-st.title("📰 News Credibility Checker")
-st.caption("Checks source reliability and writing quality — not fake news guessing.")
+# -----------------------------
+# STREAMLIT UI
+# -----------------------------
 
-user_input = st.text_area(
-    "Paste a news article or URL",
-    height=220,
-    placeholder="Paste a news article or a news website link..."
-)
+st.title("📰 AI News Credibility & Verification System")
 
-if st.button("🔍 Analyze"):
+user_input = st.text_area("Enter news text or claim:")
+
+if st.button("Analyze"):
+
     if not user_input.strip():
-        st.warning("Please enter some text or a URL.")
+        st.warning("Please enter some text.")
+        st.stop()
+
+    word_count = len(user_input.split())
+
+    if word_count < MIN_WORDS_REQUIRED:
+        st.warning("⚠ Please enter a full claim or article. Short keywords cannot be verified reliably.")
+        st.stop()
+
+    prediction, probability = analyze_text(user_input)
+
+    verified_articles = search_verified_news(user_input)
+
+    # -----------------------------
+    # DECISION LOGIC (Improved)
+    # -----------------------------
+
+    explanation = []
+
+    if verified_articles:
+        st.success("🟢 Related articles found from trusted sources.")
+        for article in verified_articles:
+            st.markdown(f"- [{article['title']}]({article['url']})")
+
+        explanation.append("Trusted news sources are reporting related information.")
+
     else:
-        with st.spinner("Analyzing credibility..."):
-            try:
-                if user_input.startswith("http"):
-                    text = extract_text(user_input)
-                    label, score, reasons = analyze_article(text, user_input)
-                else:
-                    label, score, reasons = analyze_article(user_input)
+        explanation.append("No trusted sources reporting this claim were found.")
 
-                st.subheader(label)
-                st.progress(score / 100)
-                st.metric("Credibility Score", f"{score}%")
+    # ML score interpretation
+    if probability > 0.70:
+        verdict = "🟢 Likely Reliable"
+        explanation.append("Language patterns align with credible reporting.")
+    elif probability > 0.45:
+        verdict = "🟡 Use Caution"
+        explanation.append("Language is neutral but verification is limited.")
+    else:
+        verdict = "🔴 Likely Unreliable"
+        explanation.append("Language patterns resemble misleading or sensational content.")
 
-                st.subheader("🧠 Explanation")
-                for r in reasons:
-                    st.write("•", r)
+    # If trusted articles exist, soften harsh verdict
+    if verified_articles and verdict == "🔴 Likely Unreliable":
+        verdict = "🟡 Use Caution"
+        explanation.append("However, presence of trusted sources reduces risk.")
 
-            except Exception:
-                st.error("Unable to analyze this content. The website may block access.")
+    # -----------------------------
+    # OUTPUT
+    # -----------------------------
+
+    st.subheader("Verdict:")
+    st.write(verdict)
+
+    st.subheader("Confidence Score:")
+    st.write(f"{round(probability * 100, 2)}%")
+
+    st.subheader("Explanation:")
+    for line in explanation:
+        st.write(f"- {line}")
