@@ -1,12 +1,12 @@
 import streamlit as st
-import requests
 import urllib.parse
+import feedparser
 
-NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
+st.set_page_config(page_title="AI News Verification System", layout="centered")
 
-st.title("AI News Verification System")
+st.title("🔍 AI News Verification System")
 
-user_input = st.text_area("Paste a URL, claim, or article:")
+user_input = st.text_area("Paste a URL, claim, or full article:")
 analyze = st.button("Analyze")
 
 trusted_domains = [
@@ -16,25 +16,21 @@ trusted_domains = [
     "thehindu.com",
     "hindustantimes.com",
     "timesofindia.com",
-    "msn.com",
     "indiatoday.in",
-    "news18.com"
+    "news18.com",
+    "aljazeera.com",
+    "cnn.com"
 ]
 
-def fetch_news(query):
-    url = f"https://newsapi.org/v2/everything?q={query}&language=en&apiKey={NEWS_API_KEY}"
-    response = requests.get(url)
-    data = response.json()
-    if data["status"] == "ok":
-        return data["articles"]
-    return []
-
+# ---------------------------
+# Extract headline from URL
+# ---------------------------
 def extract_headline_from_url(url):
     try:
         path = urllib.parse.urlparse(url).path
         parts = path.split("/")
-        
-        # MSN format: headline is second last part
+
+        # Handle MSN-style URLs
         if len(parts) >= 3:
             headline_part = parts[-2]
         else:
@@ -43,22 +39,44 @@ def extract_headline_from_url(url):
         headline = headline_part.replace("-", " ")
         headline = ''.join([i for i in headline if not i.isdigit()])
         return headline.strip()
+
     except:
         return ""
 
-
+# ---------------------------
+# Prepare search query
+# ---------------------------
 def prepare_query(text):
     words = text.split()
-    return " ".join(words[:20])  # use first 20 words only
+    return " ".join(words[:20])
 
+# ---------------------------
+# Fetch Google News RSS
+# ---------------------------
+def fetch_news(query):
+    url = f"https://news.google.com/rss/search?q={query}"
+    feed = feedparser.parse(url)
+
+    articles = []
+    for entry in feed.entries:
+        articles.append({
+            "title": entry.title,
+            "url": entry.link
+        })
+
+    return articles
+
+# ---------------------------
+# MAIN LOGIC
+# ---------------------------
 if analyze and user_input:
 
-    # If URL
+    # URL case
     if user_input.startswith("http"):
         query = extract_headline_from_url(user_input)
-        st.info(f"Searching trusted coverage for: {query}")
+        st.info(f"Searching coverage for: {query}")
 
-    # If claim or article
+    # Claim or article case
     else:
         query = prepare_query(user_input)
         st.info("Analyzing claim/article against trusted sources...")
@@ -72,20 +90,28 @@ if analyze and user_input:
             if any(domain in article["url"] for domain in trusted_domains)
         ]
 
-        confidence = min(len(trusted_matches) * 20, 95)
+        total_matches = len(trusted_matches)
 
-        if confidence > 40:
-            st.success(f"YES — This appears to be REAL news ({confidence}% confidence).")
-            st.write("The claim/article matches trusted news coverage.")
-            st.write("You may continue reading. Trusted sources are listed below.")
+        confidence = min(total_matches * 15, 95)
+
+        if confidence >= 45:
+            st.success(f"✅ YES — This appears to be REAL news ({confidence}% confidence).")
+            st.write("The claim/article matches multiple trusted news sources.")
+            st.write("You may continue reading. Verified sources are listed below.")
+
+        elif confidence > 0:
+            st.warning(f"⚠️ Limited coverage found ({confidence}% confidence).")
+            st.write("This may be new or not widely reported yet.")
 
         else:
-            st.warning(f"This seems UNVERIFIED or potentially unreliable ({confidence}% confidence).")
-            st.write("Limited trusted coverage found. Please verify using sources below.")
+            st.error("❌ No trusted coverage found.")
+            st.write("This claim/article may be false, misleading, or very new.")
 
-        st.subheader("Trusted Sources Reporting This:")
-        for article in trusted_matches[:5]:
-            st.markdown(f"- [{article['title']}]({article['url']})")
+        if trusted_matches:
+            st.subheader("📰 Trusted Sources Reporting This:")
+            for article in trusted_matches[:5]:
+                st.markdown(f"- [{article['title']}]({article['url']})")
 
     else:
-        st.error("No trusted coverage found. This claim/article may be false or very new.")
+        st.error("No results found in Google News.")
+        st.write("This claim/article may not exist or is extremely new.")
